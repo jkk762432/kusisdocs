@@ -12,6 +12,7 @@ h1{font-size:16px;margin:0 0 2px}.muted{color:var(--mute);font-size:13px}.warn{c
 textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;margin-top:8px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bdc1c6;margin-right:6px}.dot.on{background:#34a853}
 </style></head><body><main id="app"><div class="muted">연결하는 중…</div></main>
+<details style="max-width:460px;margin:0 auto;padding:0 16px 20px"><summary class="muted">진단 기록 (문제가 있을 때 이 내용을 알려 주세요)</summary><pre id="dbg" style="white-space:pre-wrap;font-size:12px;background:#f1f3f4;padding:8px;border-radius:6px"></pre></details>
 <script>window.FBCFG={"apiKey":"AIzaSyA12R7kCzwsiCg7gddLl7yD-MyUdb9klM8","authDomain":"kusisdocs.firebaseapp.com","databaseURL":"https://kusisdocs-default-rtdb.asia-southeast1.firebasedatabase.app","projectId":"kusisdocs","storageBucket":"kusisdocs.firebasestorage.app","messagingSenderId":"1047197237264","appId":"1:1047197237264:web:a410d20b996b622e4d0a95"};</script>
 <script>
 'use strict';
@@ -25,6 +26,7 @@ const H = new URLSearchParams(location.hash.slice(1)), NAME = (H.get('n') || '')
 const DEVICE = 'mic' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
 const SRX = window.SpeechRecognition || window.webkitSpeechRecognition;
 const FLOOR_STALE = 25000, FLUSH_MS = 2000;
+const DBG = []; const dbg = m => { DBG.push(new Date().toTimeString().slice(0, 8) + ' ' + m); if (DBG.length > 8) DBG.shift(); const d = $('dbg'); if (d) d.textContent = DBG.join('\n'); };
 let MICOK = false, DB, PROOF = '', online = false, view = null, FL = null, flSeen = 0, flSig = '';
 const K = { want: false, rec: null, srOn: false, finalT: '', interimT: '', lastChunk: '', lastRaw: '', doneIdx: 0, flushT: null, emitT: null, emitAt: 0, emitLast: '', u: '', seq: 0, haveFloor: false, err: '', failStreak: 0, sessStart: 0, hb: 0, lastPub: 0, pubT: null, queue: [], sending: false, micFail: false, finishing: false };
 
@@ -137,7 +139,7 @@ function autoFlush() {
     scheduleEmit(true);
     setTimeout(() => { K.finalT = ''; K.lastChunk = ''; K.lastRaw = ''; newU(); render(); }, 30);
 }
-function startRec() { try { K.doneIdx = 0; K.rec.start(); K.srOn = true; K.sessStart = Date.now(); return true; } catch (e) { console.error(e); return false; } }
+function startRec() { dbg('인식 시작 요청'); try { K.doneIdx = 0; K.rec.start(); K.srOn = true; K.sessStart = Date.now(); return true; } catch (e) { dbg('시작 실패: ' + e.message); console.error(e); return false; } }
 function startSpeak() {
     if (K.want) return;
     if (!meetingOn()) { K.err = offReason() || '지금은 발언할 수 없습니다.'; render(); return; }
@@ -145,7 +147,9 @@ function startSpeak() {
     if (!SRX) { K.micFail = true; K.err = '이 브라우저는 음성 인식을 지원하지 않습니다. 크롬을 쓰거나 글로 입력해 주세요.'; render(); return; }
     if (!K.rec) {
         K.rec = new SRX(); K.rec.lang = 'ko-KR'; K.rec.interimResults = true; K.rec.continuous = true;
+        ['start', 'audiostart', 'soundstart', 'speechstart', 'speechend', 'nomatch'].forEach(ev => K.rec.addEventListener(ev, () => dbg('인식 ' + ev)));
         K.rec.addEventListener('result', e => {
+            dbg('결과 받음: ' + (e.results[e.results.length - 1][0].transcript || '').slice(0, 30));
             let it = '';
             for (let i = e.resultIndex; i < e.results.length; i++) {
                 if (e.results[i].isFinal) { if (i < K.doneIdx) continue; K.doneIdx = i + 1; addFinal(e.results[i][0].transcript); }
@@ -154,6 +158,7 @@ function startSpeak() {
             K.interimT = it; render(); publishSpeaking(false); scheduleFlush(); scheduleEmit(false);
         });
         K.rec.addEventListener('end', () => {
+            dbg('인식 end');
             K.srOn = false;
             if (K.interimT) { const t = K.interimT; K.interimT = ''; if (!K.finalT.trim().endsWith(t.trim())) addFinal(t); scheduleEmit(false); }
             if (K.want) {                                           // [발언 끝내기]를 누르기 전에는 끊지 않음
@@ -166,6 +171,7 @@ function startSpeak() {
             finishSpeak();
         });
         K.rec.addEventListener('error', e => {
+            dbg('인식 오류: ' + e.error + (e.message ? ' ' + e.message : ''));
             if (e.error === 'no-speech' || e.error === 'aborted') return;
             if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { K.micFail = true; K.err = '마이크 사용이 막혀 있습니다. 주소창 왼쪽 자물쇠 → 마이크 → 허용으로 바꾼 뒤 다시 눌러 주세요.'; K.want = false; clearTimeout(K.flushT); publishSpeaking(true); releaseFloor(); render(); }
             else if (e.error === 'audio-capture') { K.micFail = true; K.err = '마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.'; K.want = false; clearTimeout(K.flushT); publishSpeaking(true); releaseFloor(); render(); }
@@ -205,9 +211,10 @@ async function flush() {
     try {
         while (K.queue.length) {
             const it = K.queue[0]; it.sent = true;
-            try { await withTimeout(DB.ref('liveIn/inbox/' + it.id).set({ name: NAME, role: 'member', proof: PROOF, text: it.text, u: it.u, seq: it.seq, device: DEVICE, ts: firebase.database.ServerValue.TIMESTAMP }), 15000); K.queue.shift(); }
+            try { dbg('문서로 보냄: ' + it.text.slice(0, 20)); await withTimeout(DB.ref('liveIn/inbox/' + it.id).set({ name: NAME, role: 'member', proof: PROOF, text: it.text, u: it.u, seq: it.seq, device: DEVICE, ts: firebase.database.ServerValue.TIMESTAMP }), 15000); K.queue.shift(); }
             catch (e) {
                 it.tries = (it.tries || 0) + 1;
+                dbg('보내기 실패: ' + (e.code || e.message));
                 if (e && e.code === 'PERMISSION_DENIED') { K.queue.shift(); K.err = '인증 코드가 맞지 않거나 회의실이 닫혀 발언을 보내지 못했습니다.'; }
                 else if (it.tries >= 6) { K.queue.shift(); K.err = '발언을 보내지 못했습니다. 인터넷 연결을 확인해 주세요.'; }
                 else { it.sent = false; await sleep(3000); }
@@ -225,14 +232,15 @@ window.addEventListener('online', flush);
         if (!firebase.apps.length) firebase.initializeApp(window.FBCFG);
         DB = firebase.database();
         if (NAME && CODE) PROOF = await sha256(`${NAME}|${CODE}|gakbu-v1`);
+        dbg('브라우저 음성 인식: ' + (SRX ? '있음' : '없음') + ' · 회의 연결 ' + (NAME ? NAME : '(이름 없음)'));
         DB.ref('rooms/live').on('value', s => { const v = s.val() || {}; online = !!v.online; view = v.view || null; if (!meetingOn() && K.want) stopHard(); render(); });
         if (PAIR && PROOF) DB.ref('liveIn/cmd/' + PAIR + '/req').on('value', s => onReq(s.val()));
         DB.ref('liveIn/floor').on('value', s => { FL = s.val(); const sig = JSON.stringify(FL); if (sig !== flSig) { flSig = sig; flSeen = Date.now(); } render(); });
         render();
         // 탭이 앞에 있을 때 미리 마이크 허용을 받아 둠 (나중에 사이드바에서 켤 때 뒤쪽 탭에서 허용 창이 안 보이는 일을 막음)
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) navigator.mediaDevices.getUserMedia({ audio: true })
-            .then(st => { st.getTracks().forEach(t => t.stop()); MICOK = true; if (/마이크/.test(K.err)) K.err = ''; render(); })
-            .catch(e => { K.err = /NotFound/.test(e.name) ? '마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.' : '마이크를 허용해 주세요. 주소창 왼쪽 자물쇠 → 마이크 → 허용으로 바꾼 뒤 이 탭을 새로고침하세요.'; render(); });
+            .then(st => { dbg('마이크 허용됨 (' + (st.getAudioTracks()[0] ? st.getAudioTracks()[0].label : '') + ')'); st.getTracks().forEach(t => t.stop()); MICOK = true; if (/마이크/.test(K.err)) K.err = ''; render(); })
+            .catch(e => { dbg('마이크 실패: ' + e.name + ' ' + e.message); K.err = /NotFound/.test(e.name) ? '마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.' : '마이크를 허용해 주세요. 주소창 왼쪽 자물쇠 → 마이크 → 허용으로 바꾼 뒤 이 탭을 새로고침하세요.'; render(); });
     } catch (e) { K.err = '연결하지 못했습니다 — ' + (e.message || e); render(); }
 })();
 </script></body></html>
