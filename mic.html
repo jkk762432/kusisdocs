@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>속기 발언 창</title>
+<style>
+:root{--p:#1a73e8;--ink:#202124;--mute:#5f6368;--line:#dadce0;--bad:#d93025}
+*{box-sizing:border-box}body{margin:0;font:15px/1.55 "Google Sans",Roboto,"Noto Sans KR",system-ui,sans-serif;color:var(--ink);background:#fff}
+main{max-width:460px;margin:0 auto;padding:18px 16px}
+h1{font-size:16px;margin:0 0 2px}.muted{color:var(--mute);font-size:13px}.warn{color:var(--bad);font-size:13px;margin-top:10px}
+.btn{display:block;width:100%;border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;font:inherit;font-weight:600;cursor:pointer;color:var(--p);margin-top:12px}
+.btn.p{background:var(--p);border-color:var(--p);color:#fff;font-size:18px;padding:18px}.btn.bad{background:var(--bad);border-color:var(--bad);color:#fff;font-size:18px;padding:18px}.btn:disabled{opacity:.45;cursor:default}
+.live{margin-top:12px;padding:10px 12px;background:#f1f3f4;border-radius:8px;min-height:44px;font-size:15px}
+.cur{margin-top:10px;font-size:13px}.tag{color:var(--p);font-weight:600}
+textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;margin-top:8px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bdc1c6;margin-right:6px}.dot.on{background:#34a853}
+</style></head><body><main id="app"><div class="muted">연결하는 중…</div></main>
+<script>window.FBCFG={"apiKey":"AIzaSyA12R7kCzwsiCg7gddLl7yD-MyUdb9klM8","authDomain":"kusisdocs.firebaseapp.com","databaseURL":"https://kusisdocs-default-rtdb.asia-southeast1.firebasedatabase.app","projectId":"kusisdocs","storageBucket":"kusisdocs.firebasestorage.app","messagingSenderId":"1047197237264","appId":"1:1047197237264:web:a410d20b996b622e4d0a95"};</script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('시간 초과')), ms))]);
+const sha256 = async str => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str)))].map(b => b.toString(16).padStart(2, '0')).join('');
+const loadScript = src => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('서버 도구를 불러오지 못했습니다')); document.head.appendChild(s); });
+const H = new URLSearchParams(location.hash.slice(1)), NAME = (H.get('n') || '').trim(), CODE = (H.get('c') || '').trim(), PAIR = (H.get('p') || '').trim().slice(0, 40);
+const DEVICE = 'mic' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
+const SRX = window.SpeechRecognition || window.webkitSpeechRecognition;
+const FLOOR_STALE = 25000, FLUSH_MS = 2000;
+let MICOK = false, DB, PROOF = '', online = false, view = null, FL = null, flSeen = 0, flSig = '';
+const K = { want: false, rec: null, srOn: false, finalT: '', interimT: '', lastChunk: '', lastRaw: '', doneIdx: 0, flushT: null, emitT: null, emitAt: 0, emitLast: '', u: '', seq: 0, haveFloor: false, err: '', failStreak: 0, sessStart: 0, hb: 0, lastPub: 0, pubT: null, queue: [], sending: false, micFail: false, finishing: false };
+
+const meetingOn = () => !!(online && view && view.phase === 'meeting' && !view.recess);
+const floorBusy = () => (FL && FL.device && FL.device !== DEVICE && Date.now() - flSeen < FLOOR_STALE) ? FL : null;
+const curText = () => (K.finalT + ' ' + K.interimT).replace(/\s+/g, ' ').trim();
+const newU = () => { K.u = DEVICE + '.' + Date.now().toString(36); K.emitLast = ''; };
+function offReason() {
+    if (!NAME || !CODE) return '사이드바의 [발언 창 열기]로 들어와 주세요. (이름·인증 코드가 필요합니다)';
+    if (!online) return '회의실이 아직 열리지 않았습니다.';
+    if (!view || view.phase === 'setup') return '개의 전입니다.';
+    if (view.phase === 'ended') return '회의가 종료되었습니다.';
+    if (view.recess) return '정회 중입니다.';
+    return '';
+}
+
+/* ----- 사이드바와 연동: 사이드바의 [발언하기]/[발언 끝내기] 요청을 받아 이 탭이 마이크를 켜고 끔 ----- */
+let lastN = 0, reqLoaded = false, stHb = 0, stT = null, stAt = 0;
+function pushSt(now) {
+    if (!PAIR || !DB || !PROOF) return;
+    clearTimeout(stT);
+    const wait = now ? 0 : Math.max(0, 300 - (Date.now() - stAt));
+    stT = setTimeout(() => {
+        stAt = Date.now();
+        const r = DB.ref('liveIn/cmd/' + PAIR + '/st');
+        r.onDisconnect().remove();
+        r.set({ name: NAME, proof: PROOF, state: K.want ? 'on' : 'idle', err: (K.err || '').slice(0, 300), text: curText().slice(-300), n: lastN, hb: ++stHb }).catch(() => {});
+    }, wait);
+}
+setInterval(() => pushSt(true), 5000);
+function onReq(r) {
+    if (!r || typeof r.n !== 'number') { reqLoaded = true; return; }
+    if (!reqLoaded) { reqLoaded = true; lastN = r.n; pushSt(true); return; }     // 탭을 열기 전의 오래된 요청은 무시
+    if (r.n <= lastN) return;
+    lastN = r.n;
+    if (r.on) { if (!K.want) startSpeak(); } else if (K.want) stopSpeak();
+    pushSt(true);
+}
+
+function render() {
+    pushSt(false);
+    document.title = (K.want ? '🔴 발언 중 — ' : '') + '속기 발언 창';
+    const why = offReason(), busy = floorBusy(), on = K.want;
+    const dis = !on && (!!why || !!busy);
+    const cur = view && view.cur;
+    $('app').innerHTML = `<h1>속기 발언 창 — ${esc(NAME || '')}</h1>
+        <div class="muted"><span class="dot${online ? ' on' : ''}"></span>${esc(view && view.meetingName || '')}${view ? ' · ' + esc(view.status || '') : ''}</div>
+        ${cur ? `<div class="cur"><span class="tag">[${esc(cur.label)}]</span> ${esc(cur.title)}</div>` : ''}
+        <button class="btn ${on ? 'bad' : 'p'}" id="go"${dis ? ' disabled' : ''}>${on ? '⏹ 발언 끝내기' : '🎤 발언하기'}</button>
+        <div class="muted" style="text-align:center;margin-top:8px">${esc(on ? '말씀하세요. 인식되는 대로 문서에 바로 기록됩니다.' : why || (busy ? `${busy.name} 님이 발언 중입니다.` : '버튼을 눌러 발언을 시작하세요. 끝날 때까지 이 탭을 닫지 마세요.'))}</div>
+        ${MICOK && !on ? '<div class="muted" style="text-align:center;margin-top:6px">✓ 마이크 준비됨</div>' : ''}
+        ${on ? `<div class="live">${esc(curText()) || '듣는 중…'}</div>` : ''}
+        ${K.err ? `<div class="warn">${esc(K.err)}</div>` : ''}
+        ${K.queue.length ? `<div class="muted">전송 대기 ${K.queue.length}건</div>` : ''}
+        ${PAIR ? '<div class="muted" style="margin-top:14px;text-align:center">이 탭은 회의가 끝날 때까지 열어 두세요. 독스 사이드바의 [발언하기]로도 켜고 끌 수 있습니다.</div>' : ''}
+        ${K.micFail || !SRX ? `<div class="warn">마이크를 쓸 수 없을 때는 글로 적어 보낼 수 있습니다.</div><textarea id="tp" placeholder="발언 내용"></textarea><button class="btn" id="tpgo"${meetingOn() ? '' : ' disabled'}>글로 보내기</button>` : ''}`;
+    $('go').onclick = () => { if (K.want) stopSpeak(); else startSpeak(); };
+    if ($('tpgo')) $('tpgo').onclick = () => { const t = $('tp').value.replace(/\s+/g, ' ').trim(); if (t && meetingOn()) { send(t, 'k' + DEVICE + Date.now().toString(36)); $('tp').value = ''; } };
+}
+
+/* ----- 발언권 · 말하는 중 표시 ----- */
+async function claimFloor() {
+    try {
+        const r = await withTimeout(DB.ref('liveIn/floor').transaction(cur => {
+            if (cur && cur.device && cur.device !== DEVICE && Date.now() - (cur.ts || 0) < FLOOR_STALE) return;
+            return { device: DEVICE, name: NAME, role: 'member', proof: PROOF, ts: firebase.database.ServerValue.TIMESTAMP };
+        }, undefined, false), 8000);
+        if (r && r.committed) { K.haveFloor = true; try { DB.ref('liveIn/floor').onDisconnect().remove(); } catch (e) { /* 무시 */ } return true; }
+        return false;
+    } catch (e) { console.error(e); return true; }
+}
+function releaseFloor() {
+    if (!K.haveFloor) return; K.haveFloor = false;
+    const r = DB.ref('liveIn/floor');
+    try { r.onDisconnect().cancel(); } catch (e) { /* 무시 */ }
+    r.transaction(cur => (cur && cur.device === DEVICE) ? null : undefined, undefined, false).catch(() => {});
+}
+function publishSpeaking(final) {
+    clearTimeout(K.pubT);
+    const r = DB.ref('liveIn/speaking/' + DEVICE);
+    if (final) { K.lastPub = 0; r.remove().catch(() => {}); return; }
+    if (!K.want) return;
+    const wait = 300 - (Date.now() - K.lastPub);
+    if (wait > 0) { K.pubT = setTimeout(() => publishSpeaking(false), wait); return; }
+    K.lastPub = Date.now(); r.onDisconnect().remove();
+    r.set({ name: NAME, role: 'member', proof: PROOF, text: curText().slice(-300), hb: ++K.hb }).catch(() => {});
+}
+setInterval(() => { if (K.want) { K.lastPub = 0; publishSpeaking(false); if (K.haveFloor) DB.ref('liveIn/floor/ts').set(firebase.database.ServerValue.TIMESTAMP).catch(() => {}); } }, 4000);
+
+/* ----- 인식 ----- */
+function addFinal(chunk) {
+    const raw = chunk.trim(), norm = raw.replace(/\s+/g, ' ');
+    if (!norm) return;
+    if (K.lastChunk && norm === K.lastChunk) return;
+    if (K.lastChunk && K.lastChunk.startsWith(norm)) return;
+    if (K.lastChunk && norm.startsWith(K.lastChunk)) {
+        const t = K.finalT.trimEnd();
+        if (t.endsWith(K.lastRaw)) K.finalT = t.slice(0, t.length - K.lastRaw.length) + raw; else K.finalT += (K.finalT ? ' ' : '') + raw.slice(K.lastRaw.length).trim();
+    } else K.finalT += (K.finalT && !/\s$/.test(K.finalT) ? ' ' : '') + raw;
+    K.lastChunk = norm; K.lastRaw = raw;
+}
+function scheduleEmit(now) {
+    clearTimeout(K.emitT);
+    K.emitT = setTimeout(() => { const t = curText().slice(0, 2000); if (!t || t === K.emitLast) return; K.emitLast = t; K.emitAt = Date.now(); send(t, K.u); }, now ? 0 : Math.max(0, 700 - (Date.now() - K.emitAt)));
+}
+function scheduleFlush() { clearTimeout(K.flushT); K.flushT = setTimeout(autoFlush, FLUSH_MS); }
+function autoFlush() {
+    if (!K.want || K.interimT.trim()) { if (K.want) scheduleFlush(); return; }
+    if (!curText()) return;
+    scheduleEmit(true);
+    setTimeout(() => { K.finalT = ''; K.lastChunk = ''; K.lastRaw = ''; newU(); render(); }, 30);
+}
+function startRec() { try { K.doneIdx = 0; K.rec.start(); K.srOn = true; K.sessStart = Date.now(); return true; } catch (e) { console.error(e); return false; } }
+function startSpeak() {
+    if (K.want) return;
+    if (!meetingOn()) { K.err = offReason() || '지금은 발언할 수 없습니다.'; render(); return; }
+    if (floorBusy()) { K.err = `${floorBusy().name} 님이 발언 중입니다.`; render(); return; }
+    if (!SRX) { K.micFail = true; K.err = '이 브라우저는 음성 인식을 지원하지 않습니다. 크롬을 쓰거나 글로 입력해 주세요.'; render(); return; }
+    if (!K.rec) {
+        K.rec = new SRX(); K.rec.lang = 'ko-KR'; K.rec.interimResults = true; K.rec.continuous = true;
+        K.rec.addEventListener('result', e => {
+            let it = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+                if (e.results[i].isFinal) { if (i < K.doneIdx) continue; K.doneIdx = i + 1; addFinal(e.results[i][0].transcript); }
+                else { const t = e.results[i][0].transcript; it = it && t.trim().startsWith(it.trim()) ? t : it + t; }
+            }
+            K.interimT = it; render(); publishSpeaking(false); scheduleFlush(); scheduleEmit(false);
+        });
+        K.rec.addEventListener('end', () => {
+            K.srOn = false;
+            if (K.interimT) { const t = K.interimT; K.interimT = ''; if (!K.finalT.trim().endsWith(t.trim())) addFinal(t); scheduleEmit(false); }
+            if (K.want) {                                           // [발언 끝내기]를 누르기 전에는 끊지 않음
+                K.failStreak = (Date.now() - K.sessStart < 1500) ? K.failStreak + 1 : 0;
+                if (K.failStreak >= 4 && !K.err) { K.err = '음성 인식이 자꾸 끊깁니다. 마이크 권한·인터넷 연결을 확인해 주세요. (계속 다시 연결을 시도합니다)'; render(); }
+                const retry = () => { if (K.want && !K.srOn && !startRec()) setTimeout(retry, 800); };
+                setTimeout(retry, Math.min(3000, 250 + K.failStreak * 400));
+                return;
+            }
+            finishSpeak();
+        });
+        K.rec.addEventListener('error', e => {
+            if (e.error === 'no-speech' || e.error === 'aborted') return;
+            if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { K.micFail = true; K.err = '마이크 사용이 막혀 있습니다. 주소창 왼쪽 자물쇠 → 마이크 → 허용으로 바꾼 뒤 다시 눌러 주세요.'; K.want = false; clearTimeout(K.flushT); publishSpeaking(true); releaseFloor(); render(); }
+            else if (e.error === 'audio-capture') { K.micFail = true; K.err = '마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.'; K.want = false; clearTimeout(K.flushT); publishSpeaking(true); releaseFloor(); render(); }
+            else if (e.error === 'network') { K.err = '음성 인식 서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요. (계속 다시 연결을 시도합니다)'; render(); }
+        });
+    }
+    K.finalT = ''; K.interimT = ''; K.lastChunk = ''; K.lastRaw = ''; K.failStreak = 0; K.err = ''; K.want = true; newU();
+    if (!startRec()) { K.want = false; K.err = '음성 인식을 시작하지 못했습니다. 잠시 후 다시 눌러 주세요.'; publishSpeaking(true); render(); return; }
+    render(); publishSpeaking(false);
+    claimFloor().then(ok => { if (!ok && K.want) { stopHard(); const f = floorBusy() || FL; K.err = `${f && f.name ? f.name + ' 님이' : '다른 분이'} 발언 중입니다. 끝난 뒤에 눌러 주세요.`; render(); } });
+}
+function stopHard() { K.want = false; try { K.rec.abort(); } catch (e) { /* 무시 */ } K.srOn = false; K.finalT = ''; K.interimT = ''; clearTimeout(K.flushT); clearTimeout(K.emitT); publishSpeaking(true); releaseFloor(); }
+function stopSpeak() {
+    if (!K.want) return;
+    K.want = false;
+    if (K.srOn) { try { K.rec.stop(); } catch (e) { /* end 에서 마무리 */ } setTimeout(() => { if (K.srOn) { try { K.rec.abort(); } catch (e) { /* 무시 */ } K.srOn = false; finishSpeak(); } }, 4000); }
+    else finishSpeak();
+    render();
+}
+function finishSpeak() {
+    if (K.finishing) return; K.finishing = true; K.want = false;
+    clearTimeout(K.flushT); clearTimeout(K.emitT);
+    const text = curText(); K.finalT = ''; K.interimT = ''; K.lastChunk = ''; K.lastRaw = '';
+    publishSpeaking(true); releaseFloor();
+    if (text && text !== K.emitLast) send(text.slice(0, 2000), K.u);
+    K.emitLast = ''; K.finishing = false; render();
+}
+
+/* ----- 전송: 같은 발언(u)의 갱신은 최신 글만 ----- */
+function send(text, u) {
+    K.queue.push({ id: DEVICE + '_' + Date.now().toString(36) + String(++K.seq).padStart(5, '0'), text, u, seq: K.seq });
+    for (let i = K.queue.length - 2; i >= 0; i--) if (K.queue[i].u === u && !K.queue[i].sent) K.queue.splice(i, 1);
+    flush();
+}
+async function flush() {
+    if (K.sending) return; K.sending = true;
+    try {
+        while (K.queue.length) {
+            const it = K.queue[0]; it.sent = true;
+            try { await withTimeout(DB.ref('liveIn/inbox/' + it.id).set({ name: NAME, role: 'member', proof: PROOF, text: it.text, u: it.u, seq: it.seq, device: DEVICE, ts: firebase.database.ServerValue.TIMESTAMP }), 15000); K.queue.shift(); }
+            catch (e) {
+                it.tries = (it.tries || 0) + 1;
+                if (e && e.code === 'PERMISSION_DENIED') { K.queue.shift(); K.err = '인증 코드가 맞지 않거나 회의실이 닫혀 발언을 보내지 못했습니다.'; }
+                else if (it.tries >= 6) { K.queue.shift(); K.err = '발언을 보내지 못했습니다. 인터넷 연결을 확인해 주세요.'; }
+                else { it.sent = false; await sleep(3000); }
+                render();
+            }
+        }
+    } finally { K.sending = false; render(); }
+}
+window.addEventListener('online', flush);
+
+(async function init() {
+    render();
+    try {
+        for (const n of ['app', 'database']) await loadScript(`https://www.gstatic.com/firebasejs/10.12.2/firebase-${n}-compat.js`);
+        if (!firebase.apps.length) firebase.initializeApp(window.FBCFG);
+        DB = firebase.database();
+        if (NAME && CODE) PROOF = await sha256(`${NAME}|${CODE}|gakbu-v1`);
+        DB.ref('rooms/live').on('value', s => { const v = s.val() || {}; online = !!v.online; view = v.view || null; if (!meetingOn() && K.want) stopHard(); render(); });
+        if (PAIR && PROOF) DB.ref('liveIn/cmd/' + PAIR + '/req').on('value', s => onReq(s.val()));
+        DB.ref('liveIn/floor').on('value', s => { FL = s.val(); const sig = JSON.stringify(FL); if (sig !== flSig) { flSig = sig; flSeen = Date.now(); } render(); });
+        render();
+        // 탭이 앞에 있을 때 미리 마이크 허용을 받아 둠 (나중에 사이드바에서 켤 때 뒤쪽 탭에서 허용 창이 안 보이는 일을 막음)
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(st => { st.getTracks().forEach(t => t.stop()); MICOK = true; if (/마이크/.test(K.err)) K.err = ''; render(); })
+            .catch(e => { K.err = /NotFound/.test(e.name) ? '마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.' : '마이크를 허용해 주세요. 주소창 왼쪽 자물쇠 → 마이크 → 허용으로 바꾼 뒤 이 탭을 새로고침하세요.'; render(); });
+    } catch (e) { K.err = '연결하지 못했습니다 — ' + (e.message || e); render(); }
+})();
+</script></body></html>
