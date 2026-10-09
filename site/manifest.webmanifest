@@ -1,0 +1,17 @@
+{
+  "name": "학부운영위원회 속기",
+  "short_name": "속기",
+  "description": "고려대학교 자유전공학부 학부운영위원회 회의 속기",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F5F3F1",
+  "theme_color": "#8A0029",
+  "lang": "ko",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

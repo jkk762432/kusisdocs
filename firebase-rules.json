@@ -1,0 +1,74 @@
+{
+  "rules": {
+    "rooms": {
+      "live": {
+        ".read": true,
+        ".write": "auth != null && (auth.token.email === 'kusis.midnight@gmail.com' || !data.exists() || data.child('owner').val() === auth.uid)",
+        ".validate": "newData.child('owner').val() === auth.uid"
+      }
+    },
+    "liveIn": {
+      ".read": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      "inbox": {
+        "$id": {
+          ".write": "$id.length <= 64 && !data.exists() && root.child('rooms').child('live').child('online').val() === true",
+          ".validate": "newData.hasChildren(['name', 'role', 'text']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('name').val().length <= 30 && (newData.child('role').val() === 'observer' || (newData.child('role').val() === 'member' && newData.child('proof').isString() && newData.child('proof').val() === root.child('liveAuth').child(newData.child('name').val()).val())) && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 2000"
+        }
+      },
+      "speaking": {
+        "$id": {
+          ".write": "$id.length <= 24 && (!newData.exists() || root.child('rooms').child('live').child('online').val() === true)",
+          ".validate": "!newData.exists() || (newData.child('name').isString() && newData.child('name').val().length <= 30 && newData.child('text').isString() && newData.child('text').val().length <= 400 && (newData.child('role').val() === 'observer' || (newData.child('role').val() === 'member' && newData.child('proof').isString() && newData.child('proof').val() === root.child('liveAuth').child(newData.child('name').val()).val())))"
+        }
+      },
+      "presence": {
+        "$id": {
+          ".write": "$id.length <= 24 && (!newData.exists() || root.child('rooms').child('live').child('online').val() === true)",
+          ".validate": "!newData.exists() || (newData.child('name').isString() && newData.child('name').val().length <= 30 && (newData.child('role').val() === 'observer' || (newData.child('role').val() === 'member' && newData.child('proof').isString() && newData.child('proof').val() === root.child('liveAuth').child(newData.child('name').val()).val())))"
+        }
+      },
+      "floor": {
+        ".read": true,
+        ".write": "!newData.exists() || (root.child('rooms').child('live').child('online').val() === true && (!data.exists() || data.child('device').val() === newData.child('device').val() || data.child('ts').val() < now - 25000))",
+        ".validate": "!newData.exists() || (newData.child('device').isString() && newData.child('device').val().length <= 24 && newData.child('name').isString() && newData.child('name').val().length <= 30 && newData.child('ts').val() === now && (newData.child('role').val() === 'observer' || (newData.child('role').val() === 'member' && newData.child('proof').isString() && newData.child('proof').val() === root.child('liveAuth').child(newData.child('name').val()).val()) || (newData.child('role').val() === 'chair' && auth != null && auth.token.email === 'kusis.midnight@gmail.com')))"
+      }
+    },
+    "edits": {
+      "live": {
+        ".read": "auth != null && root.child('rooms').child('live').child('owner').val() === auth.uid",
+        ".write": "auth != null && root.child('rooms').child('live').child('owner').val() === auth.uid",
+        "$id": {
+          ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com' && !data.exists() && root.child('rooms').child('live').child('owner').exists()",
+          ".validate": "newData.hasChildren(['idx', 'old', 'text']) && newData.child('text').isString() && newData.child('text').val().length <= 2000 && newData.child('uid').val() === auth.uid"
+        }
+      }
+    },
+    "drafts": {
+      ".read": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'"
+    },
+    "draftsMeta": {
+      ".read": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      ".indexOn": [
+        "updatedAt"
+      ]
+    },
+    "config": {
+      ".read": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'"
+    },
+    "agendaShare": {
+      "$code": {
+        ".read": true,
+        ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+        ".validate": "!newData.exists() || (newData.child('html').isString() && newData.child('html').val().length < 400001)"
+      }
+    },
+    "liveAuth": {
+      ".read": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'",
+      ".write": "auth != null && auth.token.email === 'kusis.midnight@gmail.com'"
+    }
+  }
+}

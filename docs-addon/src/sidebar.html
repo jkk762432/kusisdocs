@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko"><head><base target="_top"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/*CSS*/
+</style></head>
+<body>
+<header>
+  <div class="top"><b>속기</b><span class="st"><span class="dot" id="dot"></span><span id="st">연결 전</span></span></div>
+  <nav id="nav"><button data-tab="run" class="on">진행</button><button data-tab="write">안건지</button><button data-tab="rules">회칙</button><button data-tab="set">설정</button></nav>
+</header>
+<main>
+<section id="tab-run">
+  <div id="r-login"></div>
+  <div id="r-live"></div>
+  <div id="r-room"></div>
+  <div id="r-members"></div>
+  <div id="r-body"></div>
+  <div id="r-vote"></div>
+  <div id="r-manual"></div>
+  <div class="pend" id="pend"></div>
+</section>
+<section id="tab-write" hidden>
+  <details open><summary>① 회의 개요 · 소집 공고</summary><div class="card" id="w-meet"></div></details>
+  <details open><summary>② 안건 추가</summary><div class="card" id="w-ag"></div></details>
+  <details><summary>③ 안건 여러 개 한 번에</summary><div class="card" id="w-bulk"></div></details>
+  <details open><summary>④ 속기 위치</summary><div class="card" id="w-mark"></div></details>
+</section>
+<section id="tab-rules" hidden>
+  <div class="card">
+    <input type="search" id="q-rule" placeholder="조 번호(예: 86) 또는 낱말">
+    <div class="row"><select id="q-ch" class="grow"></select></div>
+    <div class="muted" id="q-sub"></div>
+  </div>
+  <div class="card" id="q-list"></div>
+</section>
+<section id="tab-set" hidden>
+  <div class="card" id="s-acct"></div>
+  <div class="card" id="s-meet"></div>
+  <div class="card" id="s-mem"></div>
+  <div class="card" id="s-pin"></div>
+</section>
+</main>
+<div id="toast" hidden></div>
+<script>window.RULES=/*RULES*/;window.FBCFG=/*FBCFG*/;</script>
+<script>
+/*JS*/
+</script>
+</body></html>
